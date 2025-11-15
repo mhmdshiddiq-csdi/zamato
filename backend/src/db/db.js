@@ -1,34 +1,37 @@
 const mongoose = require('mongoose');
 
-// Matikan buffering. Ini akan membuat error lebih cepat dan jelas.
-mongoose.set('bufferCommands', false); 
+const { MONGO_URI } = process.env;
+if (!MONGO_URI) {
+  throw new Error('MONGODB_URI belum diset di environment.');
+}
 
-const connectDB = async () => {
-  // Tambahkan console.log ini untuk debugging
-  console.log("Mencoba menyambung ke database...");
-  console.log("String Koneksi yang Digunakan:", process.env.DATABASE_URL); // <-- Cek apakah ini 'undefined' di log!
+// Cache di global supaya koneksi direuse antar invocation
+let cached = global._mongoose;
+if (!cached) {
+  cached = global._mongoose = { conn: null, promise: null };
+}
 
-  if (!process.env.MONGO_URI) {
-    console.error("FATAL ERROR: DATABASE_URL environment variable tidak ditemukan.");
-    process.exit(1); // Keluar dari aplikasi
-  }
+async function connectDB() {
+  if (cached.conn) return cached.conn;
 
-  try {
-    const conn = await mongoose.connect(process.env.MONGO_URI, {
-      // Opsi-opsi ini mungkin tidak diperlukan di Mongoose 8+,
-      // tapi tidak ada salahnya
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
+  if (!cached.promise) {
+    const opts = {
+      maxPoolSize: 5,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 20000,
+      family: 4,
+    };
+
+    cached.promise = mongoose.connect(MONGO_URI, opts).then((m) => {
+      m.connection.on('error', (err) => console.error('[Mongo error]', err));
+      m.connection.on('connected', () => console.log('[Mongo connected]'));
+      m.connection.on('disconnected', () => console.warn('[Mongo disconnected]'));
+      return m;
     });
-
-    // Ini HANYA akan berjalan jika koneksi SUKSES
-    console.log(`MongoDB Terhubung: ${conn.connection.host}`);
-
-  } catch (err) {
-    // Ini akan berjalan jika koneksi GAGAL
-    console.error("KONEKSI DATABASE GAGAL:", err.message);
-    process.exit(1); // Keluar dari aplikasi (sangat penting!)
   }
-};
+
+  cached.conn = await cached.promise;
+  return cached.conn;
+}
 
 module.exports = connectDB;
